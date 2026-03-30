@@ -1,11 +1,13 @@
 import 'dotenv/config';
-import makeWASocket, {
+import pkg from '@whiskeysockets/baileys';
+const {
+  default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
   isJidBroadcast,
   isJidGroup
-} from '@whiskeysockets/baileys';
+} = pkg;
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import qrcode from 'qrcode-terminal';
