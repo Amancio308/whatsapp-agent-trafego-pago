@@ -105,6 +105,39 @@ export async function marcarAgendamentoProcessado(id, googleEventId) {
   }
 }
 
+// Busca próximas reuniões agendadas (para o painel do Luiz)
+export async function getAgendamentosProximos(dias = 7) {
+  const agora = new Date().toISOString();
+  const limite = new Date(Date.now() + dias * 24 * 60 * 60 * 1000).toISOString();
+  const { data, error } = await supabase
+    .from('agendamentos')
+    .select('nome, assunto, data_reuniao, confirmado, status')
+    .eq('status', 'agendado')
+    .gte('data_reuniao', agora)
+    .lte('data_reuniao', limite)
+    .order('data_reuniao', { ascending: true });
+
+  if (error) return [];
+  return data || [];
+}
+
+// Busca reuniões de hoje
+export async function getAgendamentosHoje() {
+  const hoje = new Date();
+  const inicioHoje = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate()).toISOString();
+  const fimHoje = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate() + 1).toISOString();
+  const { data, error } = await supabase
+    .from('agendamentos')
+    .select('nome, assunto, data_reuniao, confirmado')
+    .eq('status', 'agendado')
+    .gte('data_reuniao', inicioHoje)
+    .lt('data_reuniao', fimHoje)
+    .order('data_reuniao', { ascending: true });
+
+  if (error) return [];
+  return data || [];
+}
+
 // Marca reunião como confirmada pelo cliente
 export async function confirmarAgendamento(phoneNumber) {
   const { error } = await supabase

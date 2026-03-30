@@ -1,5 +1,5 @@
 import Groq from 'groq-sdk';
-import { saveMessage, getConversationHistory, saveAgendamento, confirmarAgendamento, getProximaReuniao } from './db.js';
+import { saveMessage, getConversationHistory, saveAgendamento, confirmarAgendamento, getProximaReuniao, getAgendamentosProximos, getAgendamentosHoje } from './db.js';
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
@@ -100,14 +100,79 @@ function limparResposta(resposta) {
   return resposta.replace(/AGENDAMENTO_COLETADO:\{.*?\}\n?/s, '').trim();
 }
 
+// ─── Formata data/hora em português ──────────────────────────────────────────
+function formatarDataHora(isoString) {
+  if (!isoString) return 'horário não definido';
+  const d = new Date(isoString);
+  const dias = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado'];
+  const meses = ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
+  // UTC-3
+  const local = new Date(d.getTime() - 3 * 60 * 60 * 1000);
+  const diaSemana = dias[local.getUTCDay()];
+  const dia = local.getUTCDate();
+  const mes = meses[local.getUTCMonth()];
+  const hora = String(local.getUTCHours()).padStart(2, '0');
+  const min = String(local.getUTCMinutes()).padStart(2, '0');
+  return `${diaSemana}, ${dia} de ${mes} às ${hora}:${min}`;
+}
+
+// ─── Sistema de prompt do CHEFE (Luiz) ───────────────────────────────────────
+async function buildBossSystemPrompt() {
+  const hoje = await getAgendamentosHoje();
+  const proximas = await getAgendamentosProximos(7);
+
+  let agendaHoje = hoje.length === 0
+    ? 'Nenhuma reunião marcada para hoje.'
+    : hoje.map(r => `• ${formatarDataHora(r.data_reuniao)} — ${r.nome} | ${r.assunto} | ${r.confirmado ? '✅ Confirmado' : '⏳ Aguardando confirmação'}`).join('\n');
+
+  let proximasStr = proximas.length === 0
+    ? 'Nenhuma reunião nos próximos 7 dias.'
+    : proximas.map(r => `• ${formatarDataHora(r.data_reuniao)} — ${r.nome} | ${r.assunto} | ${r.confirmado ? '✅' : '⏳'}`).join('\n');
+
+  return `Você é a Mia, assistente pessoal do Luiz Antonio Amâncio, dono da agência. VOCÊ ESTÁ FALANDO DIRETAMENTE COM O LUIZ AGORA — não com um cliente.
+
+Trate-o como seu chefe. Seja direta, objetiva, útil e informal (tutea à vontade). Você tem acesso à agenda dele e pode responder perguntas como: quem tem reunião hoje, quais estão confirmadas, quantas marcações tem na semana etc.
+
+## AGENDA DE HOJE
+${agendaHoje}
+
+## PRÓXIMAS REUNIÕES (7 dias)
+${proximasStr}
+
+## O QUE VOCÊ PODE FAZER PELO LUIZ
+- Informar a agenda do dia ou da semana
+- Dizer quais reuniões estão confirmadas ou pendentes
+- Avisar sobre lembretes que já foram enviados
+- Responder qualquer dúvida sobre o funcionamento do sistema
+
+## O QUE VOCÊ NÃO CONSEGUE FAZER (ainda) PELO WHATSAPP
+- Cancelar ou remarcar reuniões diretamente
+- Acessar detalhes de clientes além do que está na agenda
+
+Se o Luiz pedir algo fora do seu alcance, explique brevemente e sugira que ele use o Google Calendar ou fale com o sistema Cowork.
+
+Responda em português brasileiro, de forma natural e direta. Sem formalidades excessivas.`;
+}
+
 export async function processMessage(phoneNumber, userName, messageText) {
   try {
     const history = await getConversationHistory(phoneNumber, 10);
 
+    // ── Detecta se é o Luiz (modo chefe) ──────────────────────────────────────
+    const luizPhone = process.env.LUIZ_PHONE || '';
+    const isBoss = luizPhone && phoneNumber === luizPhone;
+
+    let systemPromptContent;
+    if (isBoss) {
+      systemPromptContent = await buildBossSystemPrompt();
+    } else {
+      systemPromptContent = SYSTEM_PROMPT + (userName ? `\n\nNome do cliente no WhatsApp: ${userName}` : '');
+    }
+
     const messages = [
       {
         role: 'system',
-        content: SYSTEM_PROMPT + (userName ? `\n\nNome do cliente no WhatsApp: ${userName}` : '')
+        content: systemPromptContent
       }
     ];
 
