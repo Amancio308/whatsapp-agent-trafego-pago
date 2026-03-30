@@ -18,17 +18,56 @@ import { testConnection, upsertContact } from './db.js';
 const logger = pino({ level: 'silent' });
 const processingMessages = new Set();
 
-// ─── QR Code em memória ───────────────────────────────────────────────────────
 let currentQR = null;
-let qrImageBase64 = null;
-// ─────────────────────────────────────────────────────────────────────────────
+let activeSock = null; // socket ativo exposto para o /notify
 
-// ─── Servidor HTTP (necessário para o Render.com + UptimeRobot) ───────────────
+// ─── Delay humanizado baseado no tamanho da resposta ─────────────────────────
+function calcDelay(text) {
+  // 40ms por caractere, mínimo 2s, máximo 6s
+  const ms = Math.min(Math.max(text.length * 40, 2000), 6000);
+  return ms;
+}
+
+// ─── Servidor HTTP ───────────────────────────────────────────────────────────
 const app = express();
+app.use(express.json());
 
-app.get('/', (_, res) => res.send('🤖 Agente WhatsApp (Mia) rodando!'));
+app.get('/', (_, res) => res.send('🤖 Agente Mia rodando!'));
 app.get('/health', (_, res) => res.json({ status: 'ok', uptime: process.uptime() }));
 
+// Endpoint chamado pelo Cowork após criar evento no Google Calendar
+// Envia mensagem de confirmação ao cliente via WhatsApp
+app.post('/notify', async (req, res) => {
+  const { secret, phone, message } = req.body || {};
+
+  // Proteção simples por chave secreta
+  if (secret !== (process.env.NOTIFY_SECRET || 'mia-notify-2026')) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  if (!phone || !message) {
+    return res.status(400).json({ error: 'phone and message are required' });
+  }
+
+  if (!activeSock) {
+    return res.status(503).json({ error: 'WhatsApp not connected' });
+  }
+
+  try {
+    const jid = `${phone}@s.whatsapp.net`;
+    await activeSock.sendPresenceUpdate('composing', jid);
+    await new Promise(r => setTimeout(r, 2000));
+    await activeSock.sendPresenceUpdate('paused', jid);
+    await activeSock.sendMessage(jid, { text: message });
+    console.log(`📅 Confirmação enviada para ${phone}: ${message.substring(0, 60)}...`);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Erro ao enviar notificação:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// QR Code visual
 app.get('/qr', async (_, res) => {
   if (!currentQR) {
     return res.send(`<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -37,7 +76,7 @@ app.get('/qr', async (_, res) => {
       <style>body{font-family:sans-serif;text-align:center;padding:40px;background:#f0f0f0}</style>
       </head><body>
       <h2>⏳ Aguardando QR Code...</h2>
-      <p>A página vai atualizar automaticamente em 5 segundos.</p>
+      <p>Atualizando em 5 segundos...</p>
       </body></html>`);
   }
   try {
@@ -56,7 +95,7 @@ app.get('/qr', async (_, res) => {
       <br>
       <img src="${qrImage}" width="350" height="350" alt="QR Code">
       <br><br>
-      <p style="color:#666;font-size:14px">⏱ O QR Code renova automaticamente a cada 30s</p>
+      <p style="color:#666;font-size:14px">⏱ O QR Code renova a cada 30s</p>
       </body></html>`);
   } catch (e) {
     res.send('Erro ao gerar QR: ' + e.message);
@@ -73,8 +112,7 @@ async function startAgent() {
   const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
   const { version } = await fetchLatestBaileysVersion();
 
-  console.log(`\n🤖 Iniciando Agente WhatsApp (Baileys ${version.join('.')})\n`);
-  console.log(`\n📱 Para escanear o QR Code acesse: https://whatsapp-agent-trafego-pago.onrender.com/qr\n`);
+  console.log(`\n🤖 Iniciando Agente Mia (Baileys ${version.join('.')})\n`);
 
   const sock = makeWASocket({
     version,
@@ -91,15 +129,17 @@ async function startAgent() {
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
     if (qr) {
       currentQR = qr;
-      console.log('\n📱 Novo QR Code gerado! Acesse: https://whatsapp-agent-trafego-pago.onrender.com/qr\n');
+      console.log('\n📱 QR Code disponível em: https://whatsapp-agent-trafego-pago.onrender.com/qr\n');
     }
 
     if (connection === 'open') {
       currentQR = null;
-      console.log('\n✅ WhatsApp conectado! Agente Mia ativa 24/7!\n');
+      activeSock = sock;
+      console.log('\n✅ WhatsApp conectado! Mia ativa 24/7!\n');
     }
 
     if (connection === 'close') {
+      activeSock = null;
       const shouldReconnect = (lastDisconnect?.error instanceof Boom)
         ? lastDisconnect.error.output?.statusCode !== DisconnectReason.loggedOut
         : true;
@@ -108,7 +148,7 @@ async function startAgent() {
         console.log('🔄 Reconectando...');
         setTimeout(startAgent, 5000);
       } else {
-        console.log('❌ Sessão encerrada. Acesse /qr para escanear novamente.');
+        console.log('❌ Sessão encerrada. Acesse /qr para reconectar.');
       }
     }
   });
@@ -143,19 +183,24 @@ async function startAgent() {
 
         await sock.readMessages([msg.key]);
         await upsertContact(phoneNumber, userName);
+
+        // Simula que está digitando antes de processar
         await sock.sendPresenceUpdate('composing', jid);
-        await new Promise(r => setTimeout(r, 1500));
 
         const response = await processMessage(phoneNumber, userName, messageContent);
+
+        // Delay humanizado baseado no tamanho da resposta
+        const delay = calcDelay(response);
+        await new Promise(r => setTimeout(r, delay));
 
         await sock.sendPresenceUpdate('paused', jid);
         await sock.sendMessage(jid, { text: response });
 
-        console.log(`✉️  Respondido: ${response.substring(0, 80)}...`);
+        console.log(`✉️  Mia → ${userName || phoneNumber}: ${response.substring(0, 80)}...`);
         processingMessages.delete(msgId);
 
       } catch (err) {
-        console.error('Erro:', err);
+        console.error('Erro ao processar mensagem:', err.message);
         processingMessages.delete(msg.key.id);
       }
     }
