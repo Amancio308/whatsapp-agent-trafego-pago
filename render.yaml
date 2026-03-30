@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: whatsapp-agent-trafego-pago
+    runtime: node
+    buildCommand: npm install
+    startCommand: node index.js
+    plan: free
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: GROQ_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        value: https://jjqwnzjdsyyemdbdokws.supabase.co
+      - key: SUPABASE_ANON_KEY
+        value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpqcXduempkc3l5ZW1kYmRva3dzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NjA5MzIsImV4cCI6MjA4ODAzNjkzMn0.FvEGkSSASLrHJGnW5UrJrrO2Sk1GM0Bu2TR3p7Sd-ss

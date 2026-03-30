@@ -1,0 +1,23 @@
+{
+  "name": "whatsapp-agent-trafego-pago",
+  "version": "1.0.0",
+  "description": "Agente autônomo de WhatsApp para empresa de tráfego pago - 100% gratuito",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "groq-sdk": "^0.9.1",
+    "@whiskeysockets/baileys": "^6.7.18",
+    "@supabase/supabase-js": "^2.49.4",
+    "express": "^4.18.2",
+    "pino": "^9.6.0",
+    "qrcode-terminal": "^0.12.0",
+    "dotenv": "^16.4.7"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
