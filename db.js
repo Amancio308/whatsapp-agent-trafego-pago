@@ -54,6 +54,57 @@ export async function upsertContact(phoneNumber, userName) {
   }
 }
 
+// Salva solicitação de agendamento (será criado no Google Calendar pelo Cowork)
+export async function saveAgendamento(phoneNumber, nome, assunto, dataPreferida, horarioPreferido) {
+  const { data, error } = await supabase
+    .from('agendamentos')
+    .insert({
+      phone: phoneNumber,
+      nome: nome || 'Não informado',
+      assunto: assunto || 'Não informado',
+      data_preferida: dataPreferida || 'A combinar',
+      horario_preferido: horarioPreferido || 'A combinar',
+      status: 'pendente'
+    })
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Erro ao salvar agendamento:', error);
+    return null;
+  }
+
+  return data;
+}
+
+// Busca agendamentos pendentes (usado pelo Cowork para criar eventos no Google Calendar)
+export async function getAgendamentosPendentes() {
+  const { data, error } = await supabase
+    .from('agendamentos')
+    .select('*')
+    .eq('status', 'pendente')
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    console.error('Erro ao buscar agendamentos:', error);
+    return [];
+  }
+
+  return data || [];
+}
+
+// Marca agendamento como processado com o ID do evento do Google Calendar
+export async function marcarAgendamentoProcessado(id, googleEventId) {
+  const { error } = await supabase
+    .from('agendamentos')
+    .update({ status: 'agendado', google_event_id: googleEventId })
+    .eq('id', id);
+
+  if (error) {
+    console.error('Erro ao atualizar agendamento:', error);
+  }
+}
+
 // Testa a conexão com o Supabase
 export async function testConnection() {
   const { error } = await supabase.from('contacts').select('count').limit(1);
