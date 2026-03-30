@@ -10,7 +10,7 @@ const {
 } = pkg;
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
-import qrcode from 'qrcode-terminal';
+import qrcode from 'qrcode';
 import express from 'express';
 import { processMessage } from './agent.js';
 import { testConnection, upsertContact } from './db.js';
@@ -18,10 +18,51 @@ import { testConnection, upsertContact } from './db.js';
 const logger = pino({ level: 'silent' });
 const processingMessages = new Set();
 
+// ─── QR Code em memória ───────────────────────────────────────────────────────
+let currentQR = null;
+let qrImageBase64 = null;
+// ─────────────────────────────────────────────────────────────────────────────
+
 // ─── Servidor HTTP (necessário para o Render.com + UptimeRobot) ───────────────
 const app = express();
-app.get('/', (_, res) => res.send('🤖 Agente WhatsApp rodando!'));
+
+app.get('/', (_, res) => res.send('🤖 Agente WhatsApp (Mia) rodando!'));
 app.get('/health', (_, res) => res.json({ status: 'ok', uptime: process.uptime() }));
+
+app.get('/qr', async (_, res) => {
+  if (!currentQR) {
+    return res.send(`<!DOCTYPE html><html><head><meta charset="utf-8">
+      <meta http-equiv="refresh" content="5">
+      <title>QR Code WhatsApp</title>
+      <style>body{font-family:sans-serif;text-align:center;padding:40px;background:#f0f0f0}</style>
+      </head><body>
+      <h2>⏳ Aguardando QR Code...</h2>
+      <p>A página vai atualizar automaticamente em 5 segundos.</p>
+      </body></html>`);
+  }
+  try {
+    const qrImage = await qrcode.toDataURL(currentQR, { width: 400, margin: 2 });
+    res.send(`<!DOCTYPE html><html><head><meta charset="utf-8">
+      <meta http-equiv="refresh" content="30">
+      <title>QR Code WhatsApp - Mia</title>
+      <style>
+        body{font-family:sans-serif;text-align:center;padding:40px;background:#f0f0f0}
+        img{border:8px solid white;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.15)}
+        h1{color:#25D366}
+      </style>
+      </head><body>
+      <h1>📱 Escaneie com WhatsApp Business</h1>
+      <p>Abra o WhatsApp Business → ⋮ → <b>Dispositivos Vinculados</b> → <b>Vincular dispositivo</b></p>
+      <br>
+      <img src="${qrImage}" width="350" height="350" alt="QR Code">
+      <br><br>
+      <p style="color:#666;font-size:14px">⏱ O QR Code renova automaticamente a cada 30s</p>
+      </body></html>`);
+  } catch (e) {
+    res.send('Erro ao gerar QR: ' + e.message);
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🌐 Servidor HTTP na porta ${PORT}`));
 // ─────────────────────────────────────────────────────────────────────────────
@@ -33,6 +74,7 @@ async function startAgent() {
   const { version } = await fetchLatestBaileysVersion();
 
   console.log(`\n🤖 Iniciando Agente WhatsApp (Baileys ${version.join('.')})\n`);
+  console.log(`\n📱 Para escanear o QR Code acesse: https://whatsapp-agent-trafego-pago.onrender.com/qr\n`);
 
   const sock = makeWASocket({
     version,
@@ -48,13 +90,13 @@ async function startAgent() {
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
     if (qr) {
-      console.log('\n📱 ESCANEIE O QR CODE ABAIXO COM SEU WHATSAPP BUSINESS:\n');
-      qrcode.generate(qr, { small: true });
-      console.log('\n➡️  WhatsApp → Configurações → Dispositivos Vinculados → Vincular dispositivo\n');
+      currentQR = qr;
+      console.log('\n📱 Novo QR Code gerado! Acesse: https://whatsapp-agent-trafego-pago.onrender.com/qr\n');
     }
 
     if (connection === 'open') {
-      console.log('\n✅ WhatsApp conectado! Agente ativo 24/7!\n');
+      currentQR = null;
+      console.log('\n✅ WhatsApp conectado! Agente Mia ativa 24/7!\n');
     }
 
     if (connection === 'close') {
@@ -66,7 +108,7 @@ async function startAgent() {
         console.log('🔄 Reconectando...');
         setTimeout(startAgent, 5000);
       } else {
-        console.log('❌ Sessão encerrada. Escaneie o QR Code novamente.');
+        console.log('❌ Sessão encerrada. Acesse /qr para escanear novamente.');
       }
     }
   });
