@@ -1,5 +1,5 @@
 import Groq from 'groq-sdk';
-import { saveMessage, getConversationHistory, saveAgendamento } from './db.js';
+import { saveMessage, getConversationHistory, saveAgendamento, confirmarAgendamento, getProximaReuniao } from './db.js';
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
@@ -77,6 +77,13 @@ Logo após, escreva a mensagem natural de confirmação pro cliente. Exemplo:
 
 Responda SEMPRE em português brasileiro.`;
 
+// Detecta se a mensagem do cliente é uma confirmação de reunião
+const PALAVRAS_CONFIRMACAO = ['confirmo', 'confirmado', 'confirmei', 'vou sim', 'estarei', 'estarei lá', 'pode confirmar', 'tô dentro', 'to dentro', 'ok', 'combinado', 'perfeito', 'certo', 'sim', 'vou'];
+function isConfirmacao(texto) {
+  const t = texto.toLowerCase().trim();
+  return PALAVRAS_CONFIRMACAO.some(p => t === p || t.startsWith(p + ' ') || t.endsWith(' ' + p) || t.includes(' ' + p + ' '));
+}
+
 // Extrai dados de agendamento da resposta do modelo
 function extrairAgendamento(resposta) {
   const match = resposta.match(/AGENDAMENTO_COLETADO:(\{.*?\})/s);
@@ -106,6 +113,15 @@ export async function processMessage(phoneNumber, userName, messageText) {
 
     for (const msg of history) {
       messages.push({ role: msg.role, content: msg.content });
+    }
+
+    // Detecta confirmação de reunião antes de chamar o modelo
+    if (isConfirmacao(messageText)) {
+      const reuniao = await getProximaReuniao(phoneNumber);
+      if (reuniao && !reuniao.confirmado) {
+        await confirmarAgendamento(phoneNumber);
+        console.log(`✅ Reunião confirmada por ${userName || phoneNumber}`);
+      }
     }
 
     messages.push({ role: 'user', content: messageText });

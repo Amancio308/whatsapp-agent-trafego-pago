@@ -105,6 +105,36 @@ export async function marcarAgendamentoProcessado(id, googleEventId) {
   }
 }
 
+// Marca reunião como confirmada pelo cliente
+export async function confirmarAgendamento(phoneNumber) {
+  const { error } = await supabase
+    .from('agendamentos')
+    .update({ confirmado: true })
+    .eq('phone', phoneNumber)
+    .eq('status', 'agendado')
+    .gte('data_reuniao', new Date().toISOString());
+
+  if (error) {
+    console.error('Erro ao confirmar agendamento:', error);
+  }
+}
+
+// Verifica se há reunião agendada próxima para o número
+export async function getProximaReuniao(phoneNumber) {
+  const { data, error } = await supabase
+    .from('agendamentos')
+    .select('id, nome, assunto, data_reuniao, confirmado')
+    .eq('phone', phoneNumber)
+    .eq('status', 'agendado')
+    .gte('data_reuniao', new Date().toISOString())
+    .order('data_reuniao', { ascending: true })
+    .limit(1)
+    .single();
+
+  if (error) return null;
+  return data;
+}
+
 // Testa a conexão com o Supabase
 export async function testConnection() {
   const { error } = await supabase.from('contacts').select('count').limit(1);
