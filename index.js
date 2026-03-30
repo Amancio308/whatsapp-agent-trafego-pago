@@ -6,17 +6,20 @@ const {
   DisconnectReason,
   fetchLatestBaileysVersion,
   isJidBroadcast,
-  isJidGroup
+  isJidGroup,
+  downloadMediaMessage
 } = pkg;
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import qrcode from 'qrcode';
 import express from 'express';
+import Groq from 'groq-sdk';
 import { processMessage } from './agent.js';
 import { testConnection, upsertContact } from './db.js';
 
 const logger = pino({ level: 'silent' });
 const processingMessages = new Set();
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 let currentQR = null;
 let activeSock = null; // socket ativo exposto para o /notify
@@ -26,6 +29,27 @@ function calcDelay(text) {
   // 40ms por caractere, mínimo 2s, máximo 6s
   const ms = Math.min(Math.max(text.length * 40, 2000), 6000);
   return ms;
+}
+
+// ─── Transcrição de áudio via Groq Whisper ───────────────────────────────────
+async function transcribeAudio(msg) {
+  try {
+    const buffer = await downloadMediaMessage(msg, 'buffer', {});
+    // Node 18+ tem File/Blob global
+    const blob = new Blob([buffer], { type: 'audio/ogg; codecs=opus' });
+    const file = new File([blob], 'audio.ogg', { type: 'audio/ogg; codecs=opus' });
+    const result = await groq.audio.transcriptions.create({
+      file,
+      model: 'whisper-large-v3-turbo',
+      language: 'pt',
+      response_format: 'text'
+    });
+    // Groq retorna string quando response_format é 'text'
+    return typeof result === 'string' ? result.trim() : (result?.text || '').trim();
+  } catch (err) {
+    console.error('Erro ao transcrever áudio:', err.message);
+    return null;
+  }
 }
 
 // ─── Servidor HTTP ───────────────────────────────────────────────────────────
@@ -40,7 +64,6 @@ app.get('/health', (_, res) => res.json({ status: 'ok', uptime: process.uptime()
 app.post('/notify', async (req, res) => {
   const { secret, phone, message } = req.body || {};
 
-  // Proteção simples por chave secreta
   if (secret !== (process.env.NOTIFY_SECRET || 'mia-notify-2026')) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
@@ -54,7 +77,10 @@ app.post('/notify', async (req, res) => {
   }
 
   try {
-    const jid = `${phone}@s.whatsapp.net`;
+    // Aceita tanto JID completo (ex: 177768847384632@lid, 5511999999@s.whatsapp.net)
+    // quanto número puro (ex: 5511999999999) — neste caso assume @s.whatsapp.net
+    const jid = phone.includes('@') ? phone : `${phone}@s.whatsapp.net`;
+
     await activeSock.sendPresenceUpdate('composing', jid);
     await new Promise(r => setTimeout(r, 2000));
     await activeSock.sendPresenceUpdate('paused', jid);
@@ -164,28 +190,58 @@ async function startAgent() {
         if (isJidBroadcast(jid) || isJidGroup(jid)) continue;
         if (jid.includes('status@broadcast') || jid.includes('newsletter')) continue;
 
-        const messageContent =
-          msg.message?.conversation ||
-          msg.message?.extendedTextMessage?.text ||
-          msg.message?.imageMessage?.caption ||
-          null;
-
-        if (!messageContent) continue;
-
         const msgId = msg.key.id;
         if (processingMessages.has(msgId)) continue;
         processingMessages.add(msgId);
 
         const userName = msg.pushName || null;
-        const phoneNumber = jid.replace('@s.whatsapp.net', '');
 
-        console.log(`\n📩 ${userName || phoneNumber}: "${messageContent}"`);
+        // Armazena o JID completo como identificador (suporta @s.whatsapp.net e @lid)
+        const phoneNumber = jid;
+
+        let messageContent = null;
+        let isAudio = false;
+
+        // ── Detecta áudio (mensagem de voz ou áudio normal) ───────────────────
+        const audioMsg = msg.message?.audioMessage || msg.message?.pttMessage;
+        if (audioMsg) {
+          isAudio = true;
+          console.log(`\n🎤 Áudio recebido de ${userName || jid} — transcrevendo...`);
+          await sock.readMessages([msg.key]);
+          await sock.sendPresenceUpdate('composing', jid);
+
+          messageContent = await transcribeAudio(msg);
+
+          if (!messageContent) {
+            await sock.sendPresenceUpdate('paused', jid);
+            await sock.sendMessage(jid, {
+              text: 'Oi! Recebi seu áudio mas tive um probleminha pra entender. Pode mandar por texto? 😊'
+            });
+            processingMessages.delete(msgId);
+            continue;
+          }
+          console.log(`🎤 Transcrito: "${messageContent}"`);
+        } else {
+          // ── Detecta mensagens de texto ────────────────────────────────────
+          messageContent =
+            msg.message?.conversation ||
+            msg.message?.extendedTextMessage?.text ||
+            msg.message?.imageMessage?.caption ||
+            null;
+        }
+
+        if (!messageContent) {
+          processingMessages.delete(msgId);
+          continue;
+        }
+
+        console.log(`\n📩 ${userName || jid}: "${messageContent}"`);
 
         await sock.readMessages([msg.key]);
         await upsertContact(phoneNumber, userName);
 
-        // Simula que está digitando antes de processar
-        await sock.sendPresenceUpdate('composing', jid);
+        // Simula que está digitando enquanto processa
+        if (!isAudio) await sock.sendPresenceUpdate('composing', jid);
 
         const response = await processMessage(phoneNumber, userName, messageContent);
 
@@ -196,7 +252,7 @@ async function startAgent() {
         await sock.sendPresenceUpdate('paused', jid);
         await sock.sendMessage(jid, { text: response });
 
-        console.log(`✉️  Mia → ${userName || phoneNumber}: ${response.substring(0, 80)}...`);
+        console.log(`✉️  Mia → ${userName || jid}: ${response.substring(0, 80)}...`);
         processingMessages.delete(msgId);
 
       } catch (err) {
