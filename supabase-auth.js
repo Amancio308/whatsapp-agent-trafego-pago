@@ -8,12 +8,13 @@ import { createClient } from '@supabase/supabase-js';
 import pkg from '@whiskeysockets/baileys';
 const { initAuthCreds, BufferJSON } = pkg;
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
-);
-
 export async function useSupabaseAuthState() {
+  // Cria o cliente aqui para garantir que as env vars já estão carregadas
+  const supabase = createClient(
+    process.env.SUPABASE_URL,
+    process.env.SUPABASE_ANON_KEY
+  );
+
   // Carrega todos os dados armazenados no Supabase
   const { data: rows, error } = await supabase
     .from('baileys_auth')
