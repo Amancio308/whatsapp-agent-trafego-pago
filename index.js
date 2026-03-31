@@ -2,13 +2,13 @@ import 'dotenv/config';
 import pkg from '@whiskeysockets/baileys';
 const {
   default: makeWASocket,
-  useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
   isJidBroadcast,
   isJidGroup,
   downloadMediaMessage
 } = pkg;
+import { useSupabaseAuthState } from './supabase-auth.js';
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import qrcode from 'qrcode';
@@ -130,12 +130,24 @@ app.get('/qr', async (_, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🌐 Servidor HTTP na porta ${PORT}`));
+
+// ─── Keep-alive: pinga o próprio serviço a cada 4 min ────────────────────────
+// Previne que o Render free tier hiberne por inatividade
+const SELF_URL = process.env.RENDER_EXTERNAL_HOSTNAME
+  ? `https://${process.env.RENDER_EXTERNAL_HOSTNAME}`
+  : `http://localhost:${PORT}`;
+setInterval(async () => {
+  try {
+    await fetch(`${SELF_URL}/health`);
+    console.log('🏓 Keep-alive ping ok');
+  } catch (_) { /* ignora erros de rede */ }
+}, 4 * 60 * 1000); // 4 minutos
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function startAgent() {
   await testConnection();
 
-  const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
+  const { state, saveCreds } = await useSupabaseAuthState();
   const { version } = await fetchLatestBaileysVersion();
 
   console.log(`\n🤖 Iniciando Agente Mia (Baileys ${version.join('.')})\n`);
