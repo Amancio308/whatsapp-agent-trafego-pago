@@ -234,12 +234,26 @@ async function startAgent() {
           }
           console.log(`🎤 Transcrito: "${messageContent}"`);
         } else {
-          // ── Detecta mensagens de texto ────────────────────────────────────
+          // ── Detecta mensagens de texto (todos os tipos conhecidos) ────────
           messageContent =
             msg.message?.conversation ||
             msg.message?.extendedTextMessage?.text ||
             msg.message?.imageMessage?.caption ||
+            msg.message?.videoMessage?.caption ||
+            msg.message?.buttonsResponseMessage?.selectedDisplayText ||
+            msg.message?.listResponseMessage?.title ||
+            msg.message?.templateButtonReplyMessage?.selectedDisplayText ||
+            msg.message?.ephemeralMessage?.message?.conversation ||
+            msg.message?.ephemeralMessage?.message?.extendedTextMessage?.text ||
+            msg.message?.viewOnceMessage?.message?.imageMessage?.caption ||
+            msg.message?.viewOnceMessage?.message?.videoMessage?.caption ||
             null;
+
+          // Log de debug para tipos não reconhecidos
+          if (!messageContent) {
+            const msgType = Object.keys(msg.message || {}).join(', ');
+            console.log(`⚠️  Tipo de mensagem não tratado de ${userName || jid}: [${msgType}]`);
+          }
         }
 
         if (!messageContent) {
